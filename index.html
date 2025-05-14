@@ -1,0 +1,438 @@
+<!DOCTYPE html><html><head><meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Topological Data Explorer</title>
+    <script src="https://cdn.jsdelivr.net/npm/p5@1.8.0/lib/p5.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #0a0a1a;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        #canvas-container {
+            width: 100%;
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: center;
+            position: relative;
+        }
+        #info-panel {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(10, 10, 26, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            color: #fff;
+            font-size: 12px;
+            max-width: 300px;
+            pointer-events: none;
+        }
+    </style>
+
+<base target="_self">
+
+
+    </head><body><div id="canvas-container"></div>
+    <div id="info-panel">Click and drag to explore. Scroll to adjust connection radius.</div>
+
+    <script>
+        const sketch = (p) => {
+            // Data and visualization parameters
+            let points = [];
+            let edges = [];
+            let triangles = [];
+            let persistencePairs = [];
+            let mapperNodes = [];
+            let mapperEdges = [];
+            let currentRadius = 0;
+            let targetRadius = 0;
+            let maxRadius = 200;
+            let hoveredFeature = null;
+            let isDragging = false;
+            let dragStart = p.createVector(0, 0);
+            let rotationX = 0;
+            let rotationY = 0;
+            let targetRotationX = 0;
+            let targetRotationY = 0;
+            let colorPalette = [
+                p.color(255, 107, 107),
+                p.color(255, 159, 67),
+                p.color(254, 202, 87),
+                p.color(29, 209, 161),
+                p.color(72, 219, 251),
+                p.color(120, 111, 166)
+            ];
+
+            p.setup = () => {
+                let canvas = p.createCanvas(800, 600, p.WEBGL);
+                canvas.parent('canvas-container');
+                p.colorMode(p.HSB, 360, 100, 100, 1);
+                
+                // Generate synthetic dataset
+                generateDataset();
+                
+                // Calculate persistence pairs
+                calculatePersistence();
+                
+                // Generate Mapper graph
+                generateMapperGraph();
+                
+                // Set initial radius
+                targetRadius = maxRadius * 0.3;
+            };
+
+            function generateDataset() {
+                points = [];
+                
+                // Create clusters with different densities
+                createCluster(50, p.createVector(-150, -100, 50), 50);
+                createCluster(30, p.createVector(150, 50, -50), 80);
+                createCluster(40, p.createVector(0, 150, 100), 60);
+                createCluster(20, p.createVector(50, -150, -100), 40);
+                
+                // Add some noise points
+                for (let i = 0; i < 20; i++) {
+                    points.push({
+                        pos: p.createVector(
+                            p.random(-300, 300),
+                            p.random(-300, 300),
+                            p.random(-300, 300)
+                        ),
+                        cluster: -1
+                    });
+                }
+            }
+            
+            function createCluster(count, center, spread) {
+                const clusterId = points.length;
+                for (let i = 0; i < count; i++) {
+                    points.push({
+                        pos: p5.Vector.add(center, p.createVector(
+                            p.randomGaussian(0, spread),
+                            p.randomGaussian(0, spread),
+                            p.randomGaussian(0, spread)
+                        )),
+                        cluster: clusterId
+                    });
+                }
+            }
+            
+            function calculatePersistence() {
+                // Simplified persistence calculation (in a real app this would use a TDA library)
+                persistencePairs = [];
+                
+                // 0-dimensional features (connected components)
+                persistencePairs.push({birth: 0, death: maxRadius * 0.2, dim: 0});
+                persistencePairs.push({birth: 0, death: maxRadius * 0.15, dim: 0});
+                persistencePairs.push({birth: 0, death: maxRadius * 0.1, dim: 0});
+                
+                // 1-dimensional features (loops)
+                persistencePairs.push({birth: maxRadius * 0.3, death: maxRadius * 0.5, dim: 1});
+                persistencePairs.push({birth: maxRadius * 0.4, death: maxRadius * 0.7, dim: 1});
+                
+                // 2-dimensional features (voids)
+                persistencePairs.push({birth: maxRadius * 0.6, death: maxRadius * 0.9, dim: 2});
+            }
+            
+            function generateMapperGraph() {
+                // Simplified Mapper algorithm implementation
+                mapperNodes = [];
+                mapperEdges = [];
+                
+                // Create nodes for each cluster
+                const clusters = {};
+                points.forEach(pt => {
+                    if (pt.cluster >= 0) {
+                        if (!clusters[pt.cluster]) {
+                            clusters[pt.cluster] = {
+                                points: [],
+                                center: p.createVector(0, 0, 0)
+                            };
+                        }
+                        clusters[pt.cluster].points.push(pt);
+                        clusters[pt.cluster].center.add(pt.pos);
+                    }
+                });
+                
+                // Create mapper nodes
+                Object.keys(clusters).forEach(key => {
+                    const cluster = clusters[key];
+                    cluster.center.div(cluster.points.length);
+                    mapperNodes.push({
+                        position: cluster.center.copy(),
+                        size: cluster.points.length,
+                        clusterId: parseInt(key)
+                    });
+                });
+                
+                // Create edges between overlapping clusters
+                for (let i = 0; i < mapperNodes.length; i++) {
+                    for (let j = i + 1; j < mapperNodes.length; j++) {
+                        const dist = p5.Vector.dist(
+                            mapperNodes[i].position,
+                            mapperNodes[j].position
+                        );
+                        if (dist < maxRadius * 0.4) {
+                            mapperEdges.push({
+                                nodes: [i, j],
+                                strength: 1 - dist / (maxRadius * 0.4)
+                            });
+                        }
+                    }
+                }
+            }
+            
+            function updateComplex() {
+                edges = [];
+                triangles = [];
+                
+                // Find all edges within current radius
+                for (let i = 0; i < points.length; i++) {
+                    for (let j = i + 1; j < points.length; j++) {
+                        const dist = p5.Vector.dist(points[i].pos, points[j].pos);
+                        if (dist < currentRadius) {
+                            edges.push({
+                                points: [i, j],
+                                strength: 1 - dist / currentRadius
+                            });
+                        }
+                    }
+                }
+                
+                // Find all triangles (simplified - in real app would use proper triangulation)
+                for (let i = 0; i < edges.length; i++) {
+                    const edge = edges[i];
+                    for (let j = 0; j < points.length; j++) {
+                        if (j !== edge.points[0] && j !== edge.points[1]) {
+                            const dist1 = p5.Vector.dist(points[edge.points[0]].pos, points[j].pos);
+                            const dist2 = p5.Vector.dist(points[edge.points[1]].pos, points[j].pos);
+                            if (dist1 < currentRadius && dist2 < currentRadius) {
+                                triangles.push({
+                                    points: [edge.points[0], edge.points[1], j],
+                                    strength: (1 - dist1/currentRadius) * (1 - dist2/currentRadius)
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            
+            p.draw = () => {
+                // Smoothly interpolate radius
+                currentRadius = p.lerp(currentRadius, targetRadius, 0.1);
+                updateComplex();
+                
+                // Update rotation
+                rotationX = p.lerp(rotationX, targetRotationX, 0.1);
+                rotationY = p.lerp(rotationY, targetRotationY, 0.1);
+                
+                // Set background
+                p.background(10, 10, 26);
+                p.noStroke();
+                
+                // Set lighting
+                p.ambientLight(60);
+                p.directionalLight(255, 255, 255, -1, 1, -1);
+                
+                // Center and rotate view
+                p.push();
+                p.rotateX(rotationX);
+                p.rotateY(rotationY);
+                
+                // Draw triangles (2D simplices)
+                p.fill(29, 209, 161, 50);
+                triangles.forEach(tri => {
+                    p.beginShape();
+                    p.vertex(
+                        points[tri.points[0]].pos.x,
+                        points[tri.points[0]].pos.y,
+                        points[tri.points[0]].pos.z
+                    );
+                    p.vertex(
+                        points[tri.points[1]].pos.x,
+                        points[tri.points[1]].pos.y,
+                        points[tri.points[1]].pos.z
+                    );
+                    p.vertex(
+                        points[tri.points[2]].pos.x,
+                        points[tri.points[2]].pos.y,
+                        points[tri.points[2]].pos.z
+                    );
+                    p.endShape(p.CLOSE);
+                });
+                
+                // Draw edges (1D simplices)
+                p.stroke(72, 219, 251, 150);
+                p.strokeWeight(1);
+                edges.forEach(edge => {
+                    p.line(
+                        points[edge.points[0]].pos.x,
+                        points[edge.points[0]].pos.y,
+                        points[edge.points[0]].pos.z,
+                        points[edge.points[1]].pos.x,
+                        points[edge.points[1]].pos.y,
+                        points[edge.points[1]].pos.z
+                    );
+                });
+                
+                // Draw points (0D simplices)
+                p.noStroke();
+                points.forEach((pt, idx) => {
+                    const col = pt.cluster >= 0 ? 
+                        colorPalette[pt.cluster % colorPalette.length] : 
+                        p.color(200, 100, 100);
+                    
+                    p.push();
+                    p.translate(pt.pos.x, pt.pos.y, pt.pos.z);
+                    p.fill(col);
+                    p.sphere(3);
+                    p.pop();
+                });
+                
+                // Draw Mapper graph
+                p.stroke(255, 100);
+                p.strokeWeight(1.5);
+                mapperEdges.forEach(edge => {
+                    const n1 = mapperNodes[edge.nodes[0]];
+                    const n2 = mapperNodes[edge.nodes[1]];
+                    p.line(
+                        n1.position.x,
+                        n1.position.y,
+                        n1.position.z,
+                        n2.position.x,
+                        n2.position.y,
+                        n2.position.z
+                    );
+                });
+                
+                p.noStroke();
+                mapperNodes.forEach(node => {
+                    p.push();
+                    p.translate(node.position.x, node.position.y, node.position.z);
+                    p.fill(255, 159, 67);
+                    p.sphere(5 + node.size * 0.1);
+                    p.pop();
+                });
+                
+                // Draw persistence diagram overlay (2D projection)
+                p.pop();
+                p.push();
+                p.resetMatrix();
+                p.ortho();
+                p.translate(p.width/2 - 150, p.height/2 - 150);
+                
+                // Draw persistence diagram axes
+                p.stroke(255, 50);
+                p.strokeWeight(1);
+                p.line(0, 100, 0, 0);
+                p.line(0, 100, 100, 100);
+                
+                // Draw persistence points
+                persistencePairs.forEach(pair => {
+                    const x = p.map(pair.birth, 0, maxRadius, 0, 100);
+                    const y = p.map(pair.death, 0, maxRadius, 100, 0);
+                    const size = p.map(pair.death - pair.birth, 0, maxRadius, 3, 10);
+                    
+                    // Highlight if hovered or active
+                    const isActive = pair.birth < currentRadius && pair.death > currentRadius;
+                    const isHovered = hoveredFeature === pair;
+                    
+                    let col;
+                    if (isHovered) {
+                        col = p.color(255, 255, 255);
+                    } else if (pair.dim === 0) {
+                        col = p.color(255, 107, 107);
+                    } else if (pair.dim === 1) {
+                        col = p.color(29, 209, 161);
+                    } else {
+                        col = p.color(120, 111, 166);
+                    }
+                    
+                    if (isActive) {
+                        p.fill(col);
+                        p.noStroke();
+                        p.ellipse(x, y, size * 2);
+                    }
+                    
+                    p.stroke(col);
+                    p.strokeWeight(isHovered ? 2 : 1);
+                    p.noFill();
+                    p.ellipse(x, y, size);
+                });
+                
+                // Draw current radius indicator
+                p.stroke(255, 100);
+                p.strokeWeight(1);
+                const radiusX = p.map(currentRadius, 0, maxRadius, 0, 100);
+                p.line(radiusX, 0, radiusX, 100);
+                
+                p.pop();
+            }
+            
+            p.mousePressed = () => {
+                if (p.mouseX < p.width/2 - 50 || p.mouseY < p.height/2 - 50) {
+                    isDragging = true;
+                    dragStart = p.createVector(p.mouseX, p.mouseY);
+                }
+            };
+            
+            p.mouseReleased = () => {
+                isDragging = false;
+            };
+            
+            p.mouseDragged = () => {
+                if (isDragging) {
+                    const dx = p.mouseX - dragStart.x;
+                    const dy = p.mouseY - dragStart.y;
+                    targetRotationY += dx * 0.01;
+                    targetRotationX += dy * 0.01;
+                    dragStart = p.createVector(p.mouseX, p.mouseY);
+                }
+            };
+            
+            p.mouseMoved = () => {
+                // Check if hovering over persistence diagram
+                const diagramX = p.mouseX - (p.width/2 - 150);
+                const diagramY = p.mouseY - (p.height/2 - 150);
+                
+                if (diagramX >= 0 && diagramX <= 100 && diagramY >= 0 && diagramY <= 100) {
+                    hoveredFeature = null;
+                    let minDist = 10;
+                    
+                    persistencePairs.forEach(pair => {
+                        const x = p.map(pair.birth, 0, maxRadius, 0, 100);
+                        const y = p.map(pair.death, 0, maxRadius, 100, 0);
+                        const dist = p.dist(diagramX, diagramY, x, y);
+                        
+                        if (dist < minDist) {
+                            minDist = dist;
+                            hoveredFeature = pair;
+                        }
+                    });
+                } else {
+                    hoveredFeature = null;
+                }
+            };
+            
+            p.mouseWheel = (event) => {
+                targetRadius = p.constrain(targetRadius - event.delta * 0.5, 0, maxRadius);
+                return false;
+            };
+            
+            p.windowResized = () => {
+                p.resizeCanvas(p.windowWidth, p.windowHeight);
+            };
+        };
+
+        new p5(sketch);
+    </script>
+
+              
+          
+                
+          
+              
+</body></html>
